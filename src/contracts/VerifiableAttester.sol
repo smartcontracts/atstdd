@@ -16,7 +16,7 @@ import {
  *         verification hash is maintained that is updated with each attestation made. Offchain
  *         actors can easily verify all of the attestations made through this contract by checking
  *         that the verification hash matches the expected hash for the attestations that should
- *         have been madea. Requires that the list of attestations to be made has a fixed ordering.
+ *         have been made. Requires that the list of attestations to be made has a fixed ordering.
  */
 contract VerifiableAttester {
     /**

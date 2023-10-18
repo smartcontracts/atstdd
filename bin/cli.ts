@@ -7,7 +7,7 @@ import { ethers } from 'ethers'
 import { version } from '../package.json'
 import { encode } from '../src/components/encoder'
 import { pfactory, pattester } from '../src/utils/factory'
-import { pack } from '../src/utils/attestations'
+import { pack, slice, rehash, verify } from '../src/utils/attestations'
 import { resolve, EAS, REGISTRY } from '../src/utils/addresses'
 import { abi as VerifiableAttesterFactoryABI } from '../artifacts/src/contracts/VerifiableAttesterFactory.sol/VerifiableAttesterFactory.json'
 import { abi as VerifiableAttesterABI } from '../artifacts/src/contracts/VerifiableAttester.sol/VerifiableAttester.json'
@@ -92,13 +92,17 @@ program
 program
   .command('generate')
   .description('Generates attestations to relay to the ATST')
+  .option('--eas <string>', 'address of the EAS contract')
   .option('--registry <string>', 'address of the SchemaRegistry contract')
+  .requiredOption('--name <string>', 'name of the attestation collection')
   .requiredOption('--generator <string>', 'path to the generator script to use')
   .requiredOption('--config <string>', 'path to the configuration file to use')
   .requiredOption('--rpc <string>', 'rpc url for the network where the ATST is deployed')
   .requiredOption('--output <string>', 'path to the output file to write')
   .action(async (args: {
+    eas?: string,
     registry?: string,
+    name: string,
     generator: string,
     config: string,
     output: string,
@@ -107,15 +111,27 @@ program
     // Resolve the SchemaRegistry contract.
     const provider = new ethers.providers.StaticJsonRpcProvider(args.rpc)
     const registry = await resolve(REGISTRY, provider, args.registry)
+    const eas = await resolve(EAS, provider, args.eas)
+    const attester = new ethers.Contract(pattester(eas, args.name), VerifiableAttesterABI, provider)
 
     // Generate and encode the attestations.
+    console.log('Generating encoded attestations...')
     const generator = require(path.join(process.cwd(),args.generator)).default
     const config = require(path.join(process.cwd(), args.config))
     const attestations = await generator(config)
     const encoded = await encode(registry, args.rpc, attestations)
+    console.log(`Generated ${encoded.length} encoded attestations`)
+
+    // Pack the attestations into a MultiAttestationRequest.
+    const packed = pack(encoded)
+
+    // Slice the attestations into smaller requests.
+    console.log('Finding optimal slices, this might take a while...')
+    const sliced = await slice(attester, packed)
+    console.log(`Computed ${sliced.length} slices`)
 
     // Write the encoded attestations to disk.
-    fs.writeFileSync(args.output, JSON.stringify(encoded, null, 2))
+    fs.writeFileSync(args.output, JSON.stringify(sliced, null, 2))
   })
 
 program
@@ -142,18 +158,24 @@ program
     const wallet = new ethers.Wallet(args.key, provider)
     const attester = new ethers.Contract(pattester(eas, args.name), VerifiableAttesterABI, wallet)
 
-    // Pack the attestations into a MultiAttestationRequest.
-    const packed = pack(JSON.parse(fs.readFileSync(args.attestations, 'utf8').toString()))
+    // Load the attestations from disk.
+    const requests = JSON.parse(fs.readFileSync(args.attestations, 'utf8').toString())
 
-    // Send the transaction.
-    console.log('sending VerifiableAttester publish transaction...')
-    const tx = await attester.attest(packed)
-    console.log('transaction hash:', tx.hash)
+    // Remove any attestations that have already been published.
+    const rehashed = rehash(await attester.$vhash(), requests)
 
-    // Wait for the transaction to confirm.
-    console.log('waiting for transaction receipt...')
-    await tx.wait()
-    console.log('transaction confirmed')
+    // Send the attestation transactions.
+    for (let i = 0; i < rehashed.length; i++) {
+      const request = rehashed[i]
+      console.log(`sending VerifiableAttester attest transaction ${i+1} of ${rehashed.length}...`)
+      const tx = await attester.attest([request])
+      console.log('transaction hash:', tx.hash)
+
+      // Wait for the transaction to confirm.
+      console.log('waiting for transaction receipt...')
+      await tx.wait()
+      console.log('transaction confirmed')
+    }
   })
 
 program
@@ -179,30 +201,11 @@ program
     // Contract should be locked.
     assert.equal(await attester.$locked(), true, 'contract not locked')
 
-    // Compute the verification hash.
-    const packed = pack(JSON.parse(fs.readFileSync(args.attestations, 'utf8').toString()))
-    let vhash = ethers.constants.HashZero
-    for (const entry of packed) {
-      for (const attestation of entry.data) {
-        vhash = ethers.utils.keccak256(
-          ethers.utils.defaultAbiCoder.encode(
-            [
-              'bytes32',
-              'bytes32',
-              'tuple(address recipient, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, uint256 value)'
-            ],
-            [
-              vhash,
-              entry.schema,
-              attestation
-            ]
-          )
-        )
-      }
-    }
+    // Pack the attestations into a MultiAttestationRequest.
+    const requests = JSON.parse(fs.readFileSync(args.attestations, 'utf8').toString())
 
     // Verification hashes should match.
-    assert.equal(vhash, await attester.$vhash(), 'verification hash mismatch')
+    assert(verify(await attester.$vhash(), requests), 'verification hash mismatch')
 
     // Everything checks out.
     console.log('verification successful')

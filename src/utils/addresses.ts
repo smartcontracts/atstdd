@@ -12,14 +12,14 @@ interface ChainAddressMapping {
  * EAS contract addresses.
  */
 export const EAS: ChainAddressMapping = {
-  420: '0xa3f2188bc25682453fc0414df7f8d872a0ee5efa'
+  420: '0x4200000000000000000000000000000000000021'
 }
 
 /**
  * SchemaRegistry contract addresses.
  */
 export const REGISTRY: ChainAddressMapping = {
-  420: '0x7b24c7f8af365b4e308b6acb0a7dfc85d034cb3f'
+  420: '0x4200000000000000000000000000000000000020'
 }
 
 /**

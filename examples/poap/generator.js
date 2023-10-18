@@ -1,34 +1,49 @@
 import { request, gql } from 'graphql-request'
 
 const generator = async (config) => {
-  const results = await request(
-    'https://api.thegraph.com/subgraphs/name/poap-xyz/poap-xdai',
-    gql`
-      query Event($eventId: ID!, $first: Int) {
-        event(id: $eventId) {
-          id
-          tokenCount
-          created
-          tokens(first: $first) {
+  const query = (skip, first) => {
+    return request(
+      'https://api.thegraph.com/subgraphs/name/poap-xyz/poap-xdai',
+      gql`
+        query Event($eventId: ID!, $first: Int, $skip: Int) {
+          event(id: $eventId) {
             id
-            transferCount
+            tokenCount
             created
-            owner {
+            tokens(first: $first, skip: $skip) {
               id
+              transferCount
+              created
+              owner {
+                id
+              }
             }
           }
         }
+      `,
+      {
+        eventId: config.eventId,
+        first,
+        skip,
       }
-    `,
-    {
-      eventId: config.eventId
-    }
-  )
+    )
+  }
 
+  // Grab the base event with one token.
+  const results = await query(0, 1)
+
+  // Grab the rest of the tokens.
+  results.event.tokens = []
+  for (let i = 0; i < results.event.tokenCount; i += 100) {
+    const result = await query(i, 100)
+    results.event.tokens = [...results.event.tokens, ...result.event.tokens]
+  }
+
+  // Map into the format expected by the generator.
   return [
     ...results.event.tokens.map((token) => {
       return {
-        schema: '0xa3866145ae39fb20263674414f85b97c7ed76424a9bccd4d7302bea7d668cda6',
+        schema: '0xb63cb2363b68bc425b3595ed490d4d6d8ccc2568998196458af1ed7c9c7890b3',
         recipient: token.owner.id,
         data: {
           eventID: results.event.id,
@@ -38,11 +53,11 @@ const generator = async (config) => {
       }
     }),
     {
-      schema: '0x283113b00b913ca6657ea4b088f2b926a86f76712c31d6819fbd2335aa61d477',
+      schema: '0x720beb94bc384589f72cd28edb027b1863698825847d1a73f4219f5a1154cf36',
       recipient: null,
       data: {
         eventID: results.event.id,
-        tokenCount: parseInt(results.event.created, 10),
+        created: parseInt(results.event.created, 10),
       }
     }
   ]
